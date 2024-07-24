@@ -2,6 +2,7 @@
 #define YOLOWINDOW_H
 #include "qswitchbutton.h"
 #include "infer.h"
+#include "utils.hpp"
 
 #include <QMainWindow>
 #include <QOpenGLWidget>
@@ -14,10 +15,17 @@
 #include <QImage>
 #include <QThread>
 #include <QMutex>
-#include <QElapsedTimer>
 #include <QWaitCondition>
 #include <QAtomicInt>
 #include <thread>
+#include <QUDPSocket>
+#include <QIODevice>
+#include <QStringList>
+#include <QHostAddress>
+#include <QNetworkDatagram>
+#include <QGraphicsPixmapItem>
+#include <QGraphicsScene>
+
 
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -33,6 +41,11 @@
 extern cv::Size YOLO_SIZE;
 
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                                                  YOLO PARAMETERS                                                         //
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#define BUFFER_SIZE                                             300000                 // 100                                  //
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 const std::vector<std::string> CLASS_NAMES = {
     "thread",         "bicycle"};
@@ -49,6 +62,10 @@ namespace Ui {
 class YOLOWINDOW;
 }
 QT_END_NAMESPACE
+
+class SOCKETCAMERATHREAD;
+
+
 
 // CMyFileDialog
 class CMyFileDialog : public QFileDialog
@@ -130,7 +147,8 @@ protected:
     void                                                            run() override;
 
 signals:
-    void                                                           cameraDone();
+    void                                                            cameraDone();
+    void                                                            taskDone();
 
 public slots:
 
@@ -162,7 +180,16 @@ public:
     double                                                          __tc = 0;
     QImage                                                          QimgRes;
     QImage                                                          QimgRaw;
+    QPixmap                                                         pixmapRes;
+    QPixmap                                                         pixmapRaw;
+
     QImage                                                          Mat2QImage(cv::Mat const& src);
+    QUdpSocket                                                      client{nullptr};
+
+    QStringList                                                     __addressParser;
+    QHostAddress                                                    __Address;
+
+    QGraphicsScene *                                                scene;
 
 
 signals:
@@ -187,12 +214,6 @@ private slots:
     void                                                            forwardInfer(cv::Mat cameraImage);
     void                                                            pressBtnSlot(bool direction);
     void                                                            displayImage();
-    void                                                            displayImage(cv::Mat             imageReceived,
-                                                                                 cv::Mat             resReceived,
-                                                                                 std::vector<Object> objsReceived,
-                                                                                 double              tcReceived,
-                                                                                 bool                finishedReceived
-                                                                                 );
     void                                                            c_displayImage();
 
 private:
@@ -208,14 +229,47 @@ private:
     bool                                                            __yoloDataFlag{false};
     int                                                             __traverseIndex = 0;
     QTimer *                                                        __timer;
+
+    QImage                                                          gpcImage;
     void                                                            setAllButtonsEnabled(bool enabled);
     void                                                            setSpecificButtonsEnabled(const QStringList& buttonNames, bool enabled);
+    void                                                            graphicDisplay();
+    void                                                            Mat2QPixmap();
+
 
     VIDEOTHREAD *                                                   __videoThread;
     CAMERAThread *                                                  __cameraThread;
-    QElapsedTimer *                                                 lastUpdateTime;
+
+    SOCKETCAMERATHREAD *                                            __socketCameraThread;
 
 };
 
+
+class SOCKETCAMERATHREAD : public QThread
+{
+    Q_OBJECT
+
+public:
+    explicit SOCKETCAMERATHREAD(YOLOWINDOW *parent = nullptr);
+    ~SOCKETCAMERATHREAD();
+
+    QUdpSocket                                                      client;
+    QHostAddress                                                    serverAddress;
+
+protected:
+    void                                                            run() override;
+
+    signals:
+    void                                                            socketCameraDone();
+    void                                                            taskDone();
+
+    public slots:
+
+private:
+    void                                                            parserImage();
+    std::vector<uchar>                                              decodedimg;
+    char                                                            recv_buf[BUFFER_SIZE];  // recieve cache buffer
+    YOLOWINDOW *                                                    y_parent;
+};
 
 #endif // YOLOWINDOW_H
