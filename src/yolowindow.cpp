@@ -833,7 +833,7 @@ void YOLOWINDOW::graphicDisplay()
 
     QGraphicsPixmapItem *item = new QGraphicsPixmapItem(pixmapRaw);     // 创建QGraphicsPixmapItem
 
-
+    // image
     if( __windowState == WINDOW_STATE::IMAGERUNNING || __windowState == WINDOW_STATE::VIDEORUNNING )
     {
         ui->graphicsView->scene()->clear();
@@ -843,6 +843,7 @@ void YOLOWINDOW::graphicDisplay()
         ui->graphicsView->show();
     }
 
+    // camera
     if( __windowState == WINDOW_STATE::LOCALCAMERARUNNING || __windowState == WINDOW_STATE::REMOTECAMERARUNNING)
     {
         ui->graphicsView_2->scene()->clear();
