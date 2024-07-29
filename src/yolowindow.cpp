@@ -456,10 +456,9 @@ void YOLOWINDOW::on_pushButton_start_clicked()
         forwardInfer(__traverseIndex);
         Mat2QPixmap();
         //cv::imshow("tset", image);
+        __windowState = WINDOW_STATE::IMAGERUNNING;
         displayImage();
         graphicDisplay();
-
-        __windowState = WINDOW_STATE::IMAGERUNNING;
     }
 
     // local camera

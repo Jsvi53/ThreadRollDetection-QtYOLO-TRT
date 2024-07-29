@@ -69,7 +69,7 @@ else()
     message(FATAL_ERROR "Cannot find OpenCV in the specified directory.")
 endif()
 
-
+# Eigen3 aren't used, so also remove it from the list of dependencies.
 find_package(Eigen3 REQUIRED)
 if(Eigen3_FOUND)
     message(STATUS "Eigen3 library is found!")
