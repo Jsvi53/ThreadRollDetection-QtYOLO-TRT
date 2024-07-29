@@ -98,7 +98,7 @@ void VIDEOTHREAD::run()
 }
 
 
-CAMERAThread::CAMERAThread(QObject *parent, YOLO *t_yolo, std::vector<Object> *t_objs) : QThread(parent)
+CAMERAThread::CAMERAThread(QObject *parent, YOLO *t_yolo, std::vector<Object> *t_objs) : QThread(parent), stopped(false)
 {
     connect(this, &CAMERAThread::taskDone, this, &CAMERAThread::deleteLater);
 }
@@ -123,6 +123,13 @@ void CAMERAThread::run()
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
     for (;;)
     {
+        mutex.lock();
+        if (stopped)
+        {
+            condition.wait(&mutex);
+        }
+        mutex.unlock();
+
         cap >> *c_image;
         if ((*c_image).empty())
         {
@@ -144,7 +151,22 @@ void CAMERAThread::run()
 }
 
 
-SOCKETCAMERATHREAD::SOCKETCAMERATHREAD(YOLOWINDOW *parent) : y_parent(parent)
+void CAMERAThread::stop()
+{
+    QMutexLocker locker(&mutex);
+    stopped = true;
+}
+
+
+void CAMERAThread::restart()
+{
+    QMutexLocker locker(&mutex);
+    stopped = false;
+    condition.wakeAll();
+}
+
+
+SOCKETCAMERATHREAD::SOCKETCAMERATHREAD(YOLOWINDOW *parent) : y_parent(parent), stopped(false)
 {
     connect(this, &SOCKETCAMERATHREAD::taskDone, this, &SOCKETCAMERATHREAD::deleteLater);
 }
@@ -160,10 +182,25 @@ SOCKETCAMERATHREAD::~SOCKETCAMERATHREAD()
 void SOCKETCAMERATHREAD::run()
 {
     const char *message = "Begin to transmit images!";
-    y_parent->client.writeDatagram(message, strlen(message), y_parent->__Address,  y_parent->__addressParser.at(1).toULongLong());
+    y_parent->client.writeDatagram(message, strlen(message), y_parent->__ip,  y_parent->__port);
     while (true)
     {   decodedimg.clear();
         y_parent->image = cv::Mat();
+        mutex.lock();
+        if (stopped)
+        {   if(semaphore != 1)
+            {
+                semaphore = 1;
+            }
+            condition.wait(&mutex);
+        }
+        mutex.unlock();
+
+        if(semaphore == 1)
+        {
+            y_parent->client.writeDatagram(message, strlen(message), y_parent->__ip,  y_parent->__port);
+        }
+
         while (y_parent->client.hasPendingDatagrams())
         {
             QNetworkDatagram datagram = y_parent->client.receiveDatagram();
@@ -212,6 +249,21 @@ void SOCKETCAMERATHREAD::run()
 }
 
 
+void SOCKETCAMERATHREAD::stop()
+{
+    QMutexLocker locker(&mutex);
+    stopped = true;
+}
+
+
+void SOCKETCAMERATHREAD::restart()
+{
+    QMutexLocker locker(&mutex);
+    stopped = false;
+    condition.wakeAll();
+}
+
+
 YOLOWINDOW::YOLOWINDOW(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::YOLOWINDOW)
 {
@@ -227,7 +279,10 @@ YOLOWINDOW::YOLOWINDOW(QWidget *parent)
     buttonGroup->setExclusive(true);
 
     scene = new QGraphicsScene(this);
-    ui->graphicsView_2->setScene(scene);
+    camera_mode_scene = new QGraphicsScene(this);
+    ui->graphicsView_2->setScene(camera_mode_scene);
+    ui->graphicsView->setScene(scene);
+    checkCameraAvailability();
 
     __videoThread = new VIDEOTHREAD();
     __cameraThread = new CAMERAThread();
@@ -236,7 +291,6 @@ YOLOWINDOW::YOLOWINDOW(QWidget *parent)
 
     __socketCameraThread = new SOCKETCAMERATHREAD(this);
 
-    __engineFile = ui->lineEdit_2->text();
     // initiate switch button
     switchButton = new SwitchButton(ui->camera);
     switchButton->move(10, 40);
@@ -259,6 +313,7 @@ YOLOWINDOW::YOLOWINDOW(QWidget *parent)
     // connect timer timeout signal to pressBtnSlot
     connect(this, &YOLOWINDOW::timerTimeout, this, &YOLOWINDOW::pressBtnSlot);
 
+    // video
     connect(__videoThread, &VIDEOTHREAD::videoDone, this, [=](cv::Mat imageReceived, cv::Mat resReceived, std::vector<Object> objsReceived, double tcReceived, bool finishedReceived)
             {
                 // update image, res, objs, __tc
@@ -268,17 +323,22 @@ YOLOWINDOW::YOLOWINDOW(QWidget *parent)
                 __tc = tcReceived;
                 Mat2QPixmap();
                 c_displayImage();
+                graphicDisplay();
             });
 
+    // local camera
     connect(__cameraThread, &CAMERAThread::cameraDone, this, [=]()
     {
         Mat2QPixmap();
         c_displayImage();
+        graphicDisplay();
     });
+    // remote camera
     connect(__socketCameraThread, &SOCKETCAMERATHREAD::socketCameraDone, this, [=]()
     {
         Mat2QPixmap();
         c_displayImage();
+        graphicDisplay();
     });
 }
 
@@ -366,45 +426,13 @@ void YOLOWINDOW::on_pushButton_clicked()
 
 void YOLOWINDOW::on_pushButton_start_clicked()
 {
-    __yoloDataFlag = false;
-    imagePathList.clear();
-    __inputFile = ui->lineEdit->text(); // 获取lineEdit_2的文本
-    std::string path = __inputFile.toStdString();
-    if (IsFile(path))
-    {
-        std::string suffix = path.substr(path.find_last_of('.') + 1);
-        if (suffix == "jpg" || suffix == "jpeg" || suffix == "png")
-        {
-            imagePathList.push_back(path);
-            __yoloDataFlag = true;
-        }
-        else if (suffix == "mp4" || suffix == "avi" || suffix == "m4v" || suffix == "mpeg" || suffix == "mov" || suffix == "mkv")
-        {
-            isVideo = true;
-            __yoloDataFlag = true;
-        }
-        else
-        {
-            QMessageBox::warning(this, tr("Warning"), tr("Invalid image file path!"));
-            return;
-        }
-    }
-    else if (IsFolder(path))
-    {
-        cv::glob(path + "/*.jpg", imagePathList);
-        if (imagePathList.size() == 0)
-        {
-            QMessageBox::warning(this, tr("Warning"), tr("No image files in the folder!"));
-            return;
-        }
-        else
-        {
-            __yoloDataFlag = true;
-        }
-    }
+    windowAllStop();
+    windowModeChecked();
+    inputConfig();
+
     // video
-    if (isVideo && __yoloDataFlag && (ui->radioButton_2->isChecked()) && __yoloEnableFlag)
-    {
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone)
+    {   setAllButtonsEnabled(true);
         __videoThread->__stopRequested = 0;
         __videoThread->continueInfer();
         ui->terminal->append("\n-------------------------Vedio start inference! -------------------------\n");
@@ -412,37 +440,70 @@ void YOLOWINDOW::on_pushButton_start_clicked()
         __videoThread->v_path = path;
         __videoThread->v_yolov8 = yolov8;
         __videoThread->start();
+        __windowState = WINDOW_STATE::VIDEORUNNING;
     }
-    // image
-    if(__yoloDataFlag && (ui->radioButton->isChecked()) && __yoloEnableFlag)
-    {
+
+    // image mode
+    if(__windowMode == WINDOW_MODE::IMAGEMODE && configDone)
+    {   setAllButtonsEnabled(true);
         ui->terminal->append("\n-------------------------Image start inference! -------------------------\n");
+        QStringList buttonNames = {"pushButton", "pushButton_start", "pushButton_back", "pushButton_continue", "pushButton_save"};
+        setSpecificButtonsEnabled(buttonNames, true);
+
+        // cv::imshow("tetst", cv::imread(imagePathList[__traverseIndex]));
+        // cv::waitKey(0);
         __traverseIndex = 0;
         forwardInfer(__traverseIndex);
         Mat2QPixmap();
+        //cv::imshow("tset", image);
         displayImage();
         graphicDisplay();
-        QStringList buttonNames = {"pushButton", "pushButton_start", "pushButton_back", "pushButton_continue", "pushButton_save"};
-        setSpecificButtonsEnabled(buttonNames, true);
+
+        __windowState = WINDOW_STATE::IMAGERUNNING;
     }
+
     // local camera
-    if (ui->radioButton_3->isChecked() && __yoloEnableFlag)
+    if (__windowMode == WINDOW_MODE::LOCALCAMERAMODE && configDone)
     {
+        setAllButtonsEnabled(true);
+        if(__cameraThreadState == CAMERATHREAD_FLAGS::RESTARTED)
+        {
+            __cameraThread->restart();
+            __cameraThreadState = CAMERATHREAD_FLAGS::RUNNING;
+            ui->terminal->append("\n------------------------- Camera restart inference! -------------------------\n");
+            QStringList buttonNames = {"pushButton", "pushButton_start", "pushButton_stop"};
+            setSpecificButtonsEnabled(buttonNames, true);
+            return;
+        }
+        // update camera parameters
         __cameraThread->c_yolov8 = yolov8;
         __cameraThread->c_image = &image;
         __cameraThread->c_res = &res;
-        ui->terminal->append("\n------------------------- Camera start inference! -------------------------\n");
-        // disenable btn lsit
-        // setSpecificButtonsEnabled({"pushButton_back"}, false);
         __cameraThread->start();
-        // initialize camera
+
+        ui->terminal->append("\n------------------------- Camera start inference! -------------------------\n");
+        QStringList buttonNames = {"pushButton", "pushButton_start",  "pushButton_stop"};
+        setSpecificButtonsEnabled(buttonNames, true);
+        __cameraThreadState = CAMERATHREAD_FLAGS::RUNNING;
+        __windowState = WINDOW_STATE::LOCALCAMERARUNNING;
     }
+
     // remote camera
-    if(ui->radioButton_4->isChecked() && __yoloEnableFlag)
-    {
-        __addressParser = ui->lineEdit_3->text().split(":");
-        __Address = QHostAddress(__addressParser.at(0));
-        client.connectToHost(__Address, __addressParser.at(1).toULongLong());
+    if(__windowMode == WINDOW_MODE::REMOTECAMERAMODE && configDone)
+    {   setAllButtonsEnabled(true);
+        QStringList buttonNames = {"pushButton", "pushButton_start", "pushButton_stop"};
+        setSpecificButtonsEnabled(buttonNames, true);
+        if(__socketCameraThreadState == CAMERATHREAD_FLAGS::RESTARTED)
+        {
+            __socketCameraThread->restart();
+            __socketCameraThreadState = CAMERATHREAD_FLAGS::RUNNING;
+            ui->terminal->append("\n------------------------- Camera restart inference! -------------------------\n");
+            QStringList buttonNames = {"pushButton", "pushButton_start", "pushButton_stop"};
+            setSpecificButtonsEnabled(buttonNames, true);
+            return;
+        }
+        client.connectToHost(__ip, __port);
+
         if (!client.waitForConnected(5000))
         { // 等待5秒钟以尝试连接
             QMessageBox::warning(nullptr, "Connection Failed", "Could not connect to host: " + client.errorString());
@@ -450,27 +511,28 @@ void YOLOWINDOW::on_pushButton_start_clicked()
         }
         ui->terminal->append("\n------------------------- Camera start inference! -------------------------\n");
         __socketCameraThread->start();
-        setAllButtonsEnabled(false);
-        QStringList buttonNames = {"pushButton_start"};
-        setSpecificButtonsEnabled(buttonNames, true);
+        __socketCameraThreadState = CAMERATHREAD_FLAGS::RUNNING;
+        __windowState = WINDOW_STATE::REMOTECAMERARUNNING;
     }
 }
 
 
 void YOLOWINDOW::on_pushButton_back_clicked()
 {
-    if (__videoThread->__stopRequested == 1)
+    // video mode
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone && __windowState == WINDOW_STATE::VIDEORUNNING)
     {
-        ui->terminal->append("\n------------------------- Inference running has been stoped -------------------------\n");
-        return;
-    }
-
-    if (isVideo && __yoloDataFlag && (ui->radioButton_2->isChecked()))
-    {
+        if (__videoThread->__stopRequested == 1)
+        {
+            ui->terminal->append("\n------------------------- Inference running has been stoped -------------------------\n");
+            return;
+        }
         __videoThread->backRun();
         ui->terminal->append("\n------------------------- Backward 15 frames! -------------------------\n");
     }
-    else
+
+    // Image mode
+    if (__windowMode == WINDOW_MODE::IMAGEMODE && configDone && __windowState == WINDOW_STATE::IMAGERUNNING)
     {
         if (__traverseIndex > 0)
         {
@@ -489,20 +551,27 @@ void YOLOWINDOW::on_pushButton_back_clicked()
 // 在源文件 yolowindow.cpp 中实现这两个槽函数
 void YOLOWINDOW::on_pushButton_back_pressed()
 {
-    connect(this, &YOLOWINDOW::timerTimeout, this, &YOLOWINDOW::pressBtnSlot);
-    __timer->start(150); // 每隔100ms触发一次
+    if (__windowMode == WINDOW_MODE::IMAGEMODE && configDone && __windowState == WINDOW_STATE::IMAGERUNNING)
+    {
+        connect(this, &YOLOWINDOW::timerTimeout, this, &YOLOWINDOW::pressBtnSlot);
+        __timer->start(150); // 每隔100ms触发一次
+    }
 }
 
 
 void YOLOWINDOW::on_pushButton_back_released()
 {
-    __timer->stop();
+    if (__windowMode == WINDOW_MODE::IMAGEMODE && configDone && __windowState == WINDOW_STATE::IMAGERUNNING)
+    {
+        __timer->stop();
+    }
 }
 
 
 void YOLOWINDOW::on_pushButton_continue_clicked()
 {
-    if (isVideo && __yoloDataFlag && (ui->radioButton_2->isChecked()))
+    // video mode
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone && __windowState == WINDOW_STATE::VIDEOPAUSED)
     {
         if (__videoThread->__stopRequested == 1)
         {
@@ -512,8 +581,11 @@ void YOLOWINDOW::on_pushButton_continue_clicked()
 
         __videoThread->continueInfer();
         ui->terminal->append("\n------------------------- Continue inference! -------------------------\n");
+        return;
     }
-    else
+
+    // image mode
+    if(__windowMode == WINDOW_MODE::IMAGEMODE && configDone && __windowState == WINDOW_STATE::IMAGERUNNING)
     {
         if (__traverseIndex < imagePathList.size() - 1)
         {
@@ -521,10 +593,12 @@ void YOLOWINDOW::on_pushButton_continue_clicked()
             Mat2QPixmap();
             displayImage();
             graphicDisplay();
+            return;
         }
         else
         {
             QMessageBox::warning(this, tr("Warning"), tr("This is the last image!"));
+            return;
         }
     }
 }
@@ -532,7 +606,8 @@ void YOLOWINDOW::on_pushButton_continue_clicked()
 // 在源文件 yolowindow.cpp 中实现这两个槽函数
 void YOLOWINDOW::on_pushButton_continue_pressed()
 {
-    if (isVideo && __yoloDataFlag)
+    // video mode
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone && __windowState == WINDOW_STATE::VIDEORUNNING)
     {
         if (__videoThread->__stopRequested == 1)
         {
@@ -540,20 +615,20 @@ void YOLOWINDOW::on_pushButton_continue_pressed()
             return;
         }
     }
-    else
+
+    // image mode
+    if(__windowMode == WINDOW_MODE::IMAGEMODE && configDone && __windowState == WINDOW_STATE::IMAGERUNNING)
     {
         connect(this, &YOLOWINDOW::timerTimeout, this, &YOLOWINDOW::pressBtnSlot);
         __timer->start(150); // 每隔100ms触发一次
+        return;
     }
 }
 
 
 void YOLOWINDOW::on_pushButton_continue_released()
 {
-    if (isVideo && __yoloDataFlag && (ui->radioButton_2->isChecked()))
-    {
-    }
-    else
+    if (__windowMode == WINDOW_MODE::IMAGEMODE && configDone && __windowState == WINDOW_STATE::IMAGERUNNING)
     {
         __timer->stop();
     }
@@ -562,35 +637,66 @@ void YOLOWINDOW::on_pushButton_continue_released()
 
 void YOLOWINDOW::on_pushButton_pause_clicked()
 {
-    if (__videoThread->__stopRequested == 1)
+    // video mode
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone && __windowState == WINDOW_STATE::VIDEORUNNING && __videoThread->__stopRequested == 1)
     {
         ui->terminal->append("\n------------------------- Inference running has been stoped -------------------------\n");
         return;
     }
-    __videoThread->pauseInfer();
-    ui->terminal->append("\n------------------------- Pause inference! -------------------------\n");
+
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone && __windowState == WINDOW_STATE::VIDEORUNNING)
+    {
+        __videoThread->pauseInfer();
+        ui->terminal->append("\n------------------------- Pause inference! -------------------------\n");
+        __windowState = WINDOW_STATE::VIDEOPAUSED;
+        return;
+    }
 }
 
 
 void YOLOWINDOW::on_pushButton_stop_clicked()
 {
-    if (isVideo && __yoloDataFlag && (ui->radioButton_2->isChecked()))
+    // video mode
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone && __windowState == WINDOW_STATE::VIDEORUNNING)
     {
         __videoThread->stopInfer();
         label_raw->clear();
         label_res->clear();
         ui->terminal->append("\n------------------------- Stop inference! -------------------------\n");
+        return;
     }
+
+    // local camera mode
+    if(__windowMode == WINDOW_MODE::LOCALCAMERAMODE && configDone && __windowState == WINDOW_STATE::LOCALCAMERARUNNING)
+    {
+        __cameraThread->stop();
+        __cameraThreadState = CAMERATHREAD_FLAGS::RESTARTED;
+        label_raw->clear();
+        label_res->clear();
+        ui->label->clear();
+        ui->label_2->clear();
+        ui->terminal->append("\n------------------------- Stop inference! -------------------------\n");
+        return;
+    }
+
+    // remote camera mode
+   if(__windowMode == WINDOW_MODE::REMOTECAMERAMODE && configDone && __windowState == WINDOW_STATE::REMOTECAMERARUNNING)
+   {
+       __socketCameraThread->stop();
+       __socketCameraThreadState = CAMERATHREAD_FLAGS::RESTARTED;
+       label_raw->clear();
+       label_res->clear();
+       ui->label->clear();
+       ui->label_2->clear();
+       ui->terminal->append("\n------------------------- Stop inference! -------------------------\n");
+       return;
+   }
 }
 
 
 void YOLOWINDOW::forwardInfer(int itemIndex)
 {
-    if (isVideo && __yoloDataFlag && (ui->radioButton_2->isChecked()))
-    {
-        // pass
-    }
-    else
+    if (__windowMode == WINDOW_MODE::IMAGEMODE && configDone)
     {
         objs.clear();
         __tc = 0;
@@ -607,51 +713,16 @@ void YOLOWINDOW::forwardInfer(int itemIndex)
 }
 
 
-void YOLOWINDOW::c_forwardInfer(cv::Mat cameraImage)
-{
-    if (ui->radioButton_3->isChecked() && __yoloEnableFlag)
-    {
-        objs.clear();
-        __tc = 0;
-        image = cameraImage;
-        yolov8->copy_from_Mat(image, YOLO_SIZE);
-        auto start = std::chrono::system_clock::now();
-        yolov8->infer(); // forward inference
-        auto end = std::chrono::system_clock::now();
-        yolov8->postprocess(objs, YOLO_SCORE_THRES, YOLO_IOU_THRES, YOLO_TOPK, YOLO_SEG_CHANNELS, YOLO_SEG_H, YOLO_SEG_W);
-        yolov8->draw_objects(image, res, objs, CLASS_NAMES, COLORS, MASK_COLORS);
-        auto tc = (double)std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.;
-        __tc = tc;
-    }
-}
-
-
-void YOLOWINDOW::forwardInfer(cv::Mat cameraImage)
-{
-    if (ui->radioButton_3->isChecked() && __yoloEnableFlag)
-    {
-        objs.clear();
-        __tc = 0;
-        image = cameraImage;
-        yolov8->copy_from_Mat(image, YOLO_SIZE);
-        auto start = std::chrono::system_clock::now();
-        yolov8->infer(); // forward inference
-        auto end = std::chrono::system_clock::now();
-        yolov8->postprocess(objs, YOLO_SCORE_THRES, YOLO_IOU_THRES, YOLO_TOPK, YOLO_SEG_CHANNELS, YOLO_SEG_H, YOLO_SEG_W);
-        yolov8->draw_objects(image, res, objs, CLASS_NAMES, COLORS, MASK_COLORS);
-        auto tc = (double)std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.;
-        __tc = tc;
-    }
-}
-
-
 void YOLOWINDOW::pressBtnSlot(bool direction)
 {
-    if (isVideo && __yoloDataFlag && (ui->radioButton_2->isChecked()))
+    // video mode
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone && __windowState == WINDOW_STATE::VIDEORUNNING)
     {
         // pass
     }
-    else
+
+    // image mode
+    if(__windowMode == WINDOW_MODE::IMAGEMODE && configDone && __windowState == WINDOW_STATE::IMAGERUNNING)
     {
         // 向前infer
         if (direction == true)
@@ -688,8 +759,13 @@ void YOLOWINDOW::pressBtnSlot(bool direction)
 
 void YOLOWINDOW::on_pushButton_save_clicked()
 {
-    if (isVideo && __yoloDataFlag && (ui->radioButton_2->isChecked()))
+    if (__windowMode == WINDOW_MODE::VIDEOMODE && configDone)
     {
+        if(__windowState == WINDOW_STATE::VIDEORUNNING)
+        {
+            __videoThread->pauseInfer();
+            __windowState = WINDOW_STATE::VIDEOPAUSED;
+        }
         QString savePath = QFileDialog::getSaveFileName(this, tr("Save Image"), "", tr("Images (*.png *.jpg)"));
         if (savePath.isEmpty())
         {
@@ -700,7 +776,8 @@ void YOLOWINDOW::on_pushButton_save_clicked()
             cv::imwrite(savePath.toStdString(), res);
         }
     }
-    else
+
+    if (__windowMode == WINDOW_MODE::IMAGEMODE && configDone && __windowState == WINDOW_STATE::IMAGERUNNING)
     {
         QString savePath = QFileDialog::getSaveFileName(this, tr("Save Image"), "", tr("Images (*.png *.jpg)"));
         if (savePath.isEmpty())
@@ -746,6 +823,7 @@ void YOLOWINDOW::c_displayImage()
     }
 }
 
+
 void YOLOWINDOW::graphicDisplay()
 {
     if (pixmapRaw.isNull()) {
@@ -754,10 +832,35 @@ void YOLOWINDOW::graphicDisplay()
     }
 
     QGraphicsPixmapItem *item = new QGraphicsPixmapItem(pixmapRaw);     // 创建QGraphicsPixmapItem
-    ui->graphicsView_2->scene()->clear();
-    ui->graphicsView_2->scene()->addItem(item);
-    ui->graphicsView_2->fitInView(item, Qt::KeepAspectRatio);       // 缩放图像以适应 graphicsView_2 的大小
-    ui->graphicsView_2->update();       // 确保UI进行刷新
+
+
+    if( __windowState == WINDOW_STATE::IMAGERUNNING || __windowState == WINDOW_STATE::VIDEORUNNING )
+    {
+        ui->graphicsView->scene()->clear();
+        ui->graphicsView->scene()->addItem(item);
+        ui->graphicsView->fitInView(item, Qt::KeepAspectRatio); // 缩放图像以适应 graphicsView的大小
+        ui->graphicsView->update();                             // 确保UI进行刷新
+        ui->graphicsView->show();
+    }
+
+    if( __windowState == WINDOW_STATE::LOCALCAMERARUNNING || __windowState == WINDOW_STATE::REMOTECAMERARUNNING)
+    {
+        ui->graphicsView_2->scene()->clear();
+        ui->graphicsView_2->scene()->addItem(item);
+
+        // 设置 QGraphicsView 的场景矩形为项目的边界矩形
+        ui->graphicsView_2->setSceneRect(item->boundingRect());
+        // 将图像缩放到适应 QGraphicsView 的大小，并保持纵横比
+        ui->graphicsView_2->fitInView(item, Qt::KeepAspectRatio);
+        // 禁用滚动条
+        ui->graphicsView_2->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        ui->graphicsView_2->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        // 确保图像填满整个视图
+        ui->graphicsView_2->setRenderHint(QPainter::SmoothPixmapTransform, true);
+        // 更新和显示视图
+        ui->graphicsView_2->update();
+        ui->graphicsView_2->show();
+    }
 }
 
 
@@ -780,6 +883,182 @@ void YOLOWINDOW::Mat2QPixmap()
 }
 
 
+void YOLOWINDOW::windowModeChecked()
+{
+    if (ui->radioButton->isChecked()){__windowMode = WINDOW_MODE::IMAGEMODE;}
+    if (ui->radioButton_2->isChecked()){__windowMode = WINDOW_MODE::VIDEOMODE;}
+    if (ui->radioButton_3->isChecked()){__windowMode = WINDOW_MODE::LOCALCAMERAMODE;}
+    if (ui->radioButton_4->isChecked()){__windowMode = WINDOW_MODE::REMOTECAMERAMODE;}
+}
+
+
+void YOLOWINDOW::windowAllStop()
+{
+    if( __windowState == WINDOW_STATE::IMAGERUNNING)
+    {
+        __windowState = WINDOW_STATE::WINDOWSTOPPED;
+    }
+    if (__windowState == WINDOW_STATE::VIDEORUNNING)
+    {
+        __videoThread->stopInfer();
+        label_raw->clear();
+        label_res->clear();
+        __windowState = WINDOW_STATE::WINDOWSTOPPED;
+    }
+
+    if (__windowState == WINDOW_STATE::LOCALCAMERARUNNING)
+    {
+        __cameraThread->stop();
+        label_raw->clear();
+        label_res->clear();
+        ui->label->clear();
+        ui->label_2->clear();
+        __windowState = WINDOW_STATE::WINDOWSTOPPED;
+    }
+
+    if (__windowState == WINDOW_STATE::REMOTECAMERARUNNING)
+    {
+       __socketCameraThread->stop();
+       label_raw->clear();
+       label_res->clear();
+       ui->label->clear();
+       ui->label_2->clear();
+       __windowState = WINDOW_STATE::WINDOWSTOPPED;
+   }
+}
+
+
+void YOLOWINDOW::inputConfig()
+{
+    if(__windowState != WINDOW_STATE::WINDOWSTOPPED){ return; }
+    // clear image data
+    __yoloDataFlag = false;
+
+    // clear ip
+    path.clear();
+    __ip.clear();
+    __port = 0;
+    // clear engine file
+    __engineFile.clear();
+    __engineFileFlag = false;
+    __engineFile = ui->lineEdit_2->text().toStdString();
+    // clear config
+    configDone = false;
+
+    if(__windowMode == WINDOW_MODE::IMAGEMODE)
+    {
+        imagePathList.clear();
+        path = ui->lineEdit->text().toStdString();
+        if(IsFile(path))
+        {
+            std::string suffix = path.substr(path.find_last_of('.') + 1);
+            if (suffix == "jpg" || suffix == "jpeg" || suffix == "png")
+            {
+                imagePathList.push_back(path);
+                __yoloDataFlag = true;
+            }
+            else
+            {
+                QMessageBox::warning(this, tr("Warning"), tr("Invalid image file path!"));
+                return;
+            }
+        }
+        else if (IsFolder(path))
+        {
+            cv::glob(path + "/*.jpg", imagePathList);
+            if (imagePathList.size() == 0)
+            {
+                QMessageBox::warning(this, tr("Warning"), tr("No image files in the folder!"));
+                return;
+            }
+            else
+            {
+                __yoloDataFlag = true;
+            }
+        }
+        else
+        {
+            QMessageBox::warning(this, tr("Warning"), tr("Invalid file path!"));
+            return;
+        }
+    }
+
+    if(__windowMode == WINDOW_MODE::VIDEOMODE)
+    {
+        path = ui->lineEdit->text().toStdString();
+        if (IsFile(path))
+        {
+            std::string suffix = path.substr(path.find_last_of('.') + 1);
+            if (suffix == "mp4" || suffix == "avi" || suffix == "m4v" || suffix == "mpeg" || suffix == "mov" || suffix == "mkv")
+            {
+                __yoloDataFlag = true;
+            }
+            else
+            {
+                QMessageBox::warning(this, tr("Warning"), tr("Invalid video file path!"));
+                return;
+            }
+        }
+        else
+        {
+            QMessageBox::warning(this, tr("Warning"), tr("Invalid video file path!"));
+            return;
+        }
+    }
+
+    if(__windowMode == WINDOW_MODE::LOCALCAMERAMODE)
+    {
+        __yoloDataFlag = true;
+    }
+
+    if(__windowMode == WINDOW_MODE::REMOTECAMERAMODE)
+    {
+        const std::string ip = ui->lineEdit_3->text().toStdString();
+        if(v_utils::ipFormatChecked(ip))
+        {
+            QStringList __addressParser = ui->lineEdit_3->text().split(":");
+            __ip = QHostAddress(__addressParser.at(0));
+            __port = __addressParser.at(1).toULongLong();
+            __yoloDataFlag = true;
+        }
+        else
+        {
+            QMessageBox::warning(this, tr("Warning"), tr("Invalid IP address!"));
+            return;
+        }
+    }
+
+    if(v_utils::engineTypeChecked(__engineFile))
+    {
+        __engineFileFlag = true;
+    }
+    else
+    {
+        QMessageBox::warning(this, tr("Warning"), tr("Invalid engine file path!"));
+        return;
+    }
+
+    if(__yoloDataFlag && __engineFileFlag)
+    {
+        configDone = true;
+    }
+}
+
+void YOLOWINDOW::checkCameraAvailability()
+{
+    QIcon cameraOnIcon(":/menu/USB_Camera_btn_online.svg");      // :表示资源文件路径，/menuResource是资源文件所在文件夹的相对路径
+    QIcon cameraOffIcon(":/menu/USB_Camera_btn_offline.svg");
+
+    if (QMediaDevices::videoInputs().count() > 0)
+    {
+        ui->actionUSB_Camera->setIcon(cameraOnIcon);
+    }
+    else
+    {
+        ui->actionUSB_Camera->setIcon(cameraOffIcon);
+    }
+
+}
 /*********************************************** Extra Functions *******************************************************/
 void YOLOWINDOW::setSpecificButtonsEnabled(const QStringList &buttonNames, bool enabled)
 { /*

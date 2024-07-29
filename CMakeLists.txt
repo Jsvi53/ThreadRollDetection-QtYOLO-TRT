@@ -44,8 +44,8 @@ add_custom_target(copy_compile_commands ALL DEPENDS "${COMPILE_COMMANDS_OUTPUT_D
 
 set(TS_FILES YOLO_zh_CN.ts)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets LinguistTools OpenGLWidgets Qml Concurrent)  # 添加组件时，名字去掉关于Qt的
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets LinguistTools OpenGLWidgets Qml Concurrent)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets LinguistTools OpenGLWidgets Qml Concurrent Multimedia)  # 添加组件时，名字去掉关于Qt的
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets LinguistTools OpenGLWidgets Qml Concurrent Multimedia)
 if(Qt6_FOUND)
     message(STATUS "Qt6 library is found!")
 else()
@@ -117,12 +117,13 @@ aux_source_directory("src" SRC_LIST)
 
 set(TS_FILES YOLO_zh_CN.ts)
 set(QT_SOURCES "include/yolowindow.h" "src/yolowindow.ui" "include/qswitchbutton.h")
-list(APPEND SRC_LIST ${QT_SOURCES} ${TS_FILES})
+set(QT_RESOURCES "resources/resource.qrc")
+list(APPEND SRC_LIST ${QT_SOURCES} ${TS_FILES} ${QT_RESOURCES})
 qt_add_executable(THREAD_YOLO_RT_VSCODE MANUAL_FINALIZATION WIN32 main.cpp main.hpp)
-qt_create_translation(QM_FILES ${CMAKE_SOURCE_DIR} ${TS_FILES})
+qt_create_translation(QM_FILES ${CMAKE_SOURCE_DIR} ${TS_FILES} )
 target_sources(THREAD_YOLO_RT_VSCODE PRIVATE ${SRC_LIST})
 target_include_directories(THREAD_YOLO_RT_VSCODE PRIVATE ${OpenCV_INCLUDE_DIRS} ${TENSORRT_INCLUDE_DIR} ${CUDAToolkit_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR} "include")
-set(QT_LIBRARIES Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::OpenGLWidgets Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Network)   #模块需要单独找包
+set(QT_LIBRARIES Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::OpenGLWidgets Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Multimedia)   #模块需要单独找包
 target_link_libraries(THREAD_YOLO_RT_VSCODE PRIVATE ${OpenCV_LIBS} ${CUDA_cublas_LIBRARY} ${CUDA_cudart_static_LIBRARY} ${TENSORRT_LIBRARY} ${QT_LIBRARIES})
 
 

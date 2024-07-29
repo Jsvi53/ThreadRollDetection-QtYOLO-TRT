@@ -25,8 +25,8 @@
 #include <QNetworkDatagram>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
-
-
+#include <QMediaDevices>
+#include <QCameraDevice>
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //                                                  YOLO PARAMETERS                                                         //
@@ -44,8 +44,9 @@ extern cv::Size YOLO_SIZE;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //                                                  YOLO PARAMETERS                                                         //
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#define BUFFER_SIZE                                             300000                 // 100                                  //
+#define BUFFER_SIZE                                             300000              // 100                                  //
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 
 const std::vector<std::string> CLASS_NAMES = {
     "thread",         "bicycle"};
@@ -143,6 +144,10 @@ public:
     cv::Mat *                                                       c_image;
     double *                                                        c_tc;
 
+    void                                                            stop();
+    void                                                            restart();
+
+
 protected:
     void                                                            run() override;
 
@@ -155,7 +160,12 @@ public slots:
 
 
 private:
+    std::atomic<bool>                                                stopped;
+
     QWidget *                                                        c_board;
+    QMutex                                                           mutex;
+    QWaitCondition                                                   condition;
+
 };
 
 
@@ -170,7 +180,6 @@ public:
     QButtonGroup *                                                  buttonGroup{nullptr};
     YOLO *                                                          yolov8;
     std::vector<std::string>                                        imagePathList;
-    bool                                                            isVideo{false};
 
     cv::VideoCapture *                                              cap;
     cv::Mat                                                         res;
@@ -185,11 +194,13 @@ public:
 
     QImage                                                          Mat2QImage(cv::Mat const& src);
     QUdpSocket                                                      client{nullptr};
-
-    QStringList                                                     __addressParser;
-    QHostAddress                                                    __Address;
+    QHostAddress                                                    __ip;
+    qulonglong                                                      __port;
 
     QGraphicsScene *                                                scene;
+    QGraphicsScene *                                                camera_mode_scene;
+
+    bool                                                            configDone{false};
 
 
 signals:
@@ -209,9 +220,7 @@ private slots:
     void                                                            on_pushButton_pause_clicked();
     void                                                            on_pushButton_stop_clicked();
     void                                                            on_pushButton_save_clicked();
-    void                                                            c_forwardInfer(cv::Mat cameraImage);
     void                                                            forwardInfer(int itemIndex);
-    void                                                            forwardInfer(cv::Mat cameraImage);
     void                                                            pressBtnSlot(bool direction);
     void                                                            displayImage();
     void                                                            c_displayImage();
@@ -223,23 +232,46 @@ private:
     QLabel *                                                        label_res;
 
 
-    QString                                                         __engineFile;
+    std::string                                                     path;
+    std::string                                                     __engineFile;
+    bool                                                            __engineFileFlag{false};
     QString                                                         __inputFile;
     bool                                                            __yoloEnableFlag{false};
     bool                                                            __yoloDataFlag{false};
     int                                                             __traverseIndex = 0;
     QTimer *                                                        __timer;
-
     QImage                                                          gpcImage;
+    enum                                                           class CAMERATHREAD_FLAGS{STOPPED, RUNNING, RESTARTED};
+    CAMERATHREAD_FLAGS                                             __cameraThreadState = CAMERATHREAD_FLAGS::STOPPED;
+    CAMERATHREAD_FLAGS                                             __socketCameraThreadState = CAMERATHREAD_FLAGS::STOPPED;
+
+    enum                                                            class WINDOW_STATE{IMAGERUNNING,
+                                                                                        VIDEORUNNING,
+                                                                                        LOCALCAMERARUNNING,
+                                                                                        REMOTECAMERARUNNING,
+                                                                                        VIDEOPAUSED,
+                                                                                        LOCALCAMERAPAUSED,
+                                                                                        REMOTECAMERAPAUSED,
+                                                                                        WINDOWSTOPPED
+                                                                                        };
+    WINDOW_STATE                                                   __windowState = WINDOW_STATE::WINDOWSTOPPED;
+
+    enum                                                           class WINDOW_MODE{IMAGEMODE, VIDEOMODE, LOCALCAMERAMODE, REMOTECAMERAMODE};
+    WINDOW_MODE                                                    __windowMode = WINDOW_MODE::IMAGEMODE;
+
+
+
     void                                                            setAllButtonsEnabled(bool enabled);
     void                                                            setSpecificButtonsEnabled(const QStringList& buttonNames, bool enabled);
     void                                                            graphicDisplay();
     void                                                            Mat2QPixmap();
-
+    void                                                            windowModeChecked();
+    void                                                            windowAllStop();
+    void                                                            inputConfig();
+    void                                                            checkCameraAvailability();
 
     VIDEOTHREAD *                                                   __videoThread;
     CAMERAThread *                                                  __cameraThread;
-
     SOCKETCAMERATHREAD *                                            __socketCameraThread;
 
 };
@@ -255,21 +287,30 @@ public:
 
     QUdpSocket                                                      client;
     QHostAddress                                                    serverAddress;
+    void                                                            stop();
+    void                                                            restart();
 
 protected:
     void                                                            run() override;
 
-    signals:
+signals:
     void                                                            socketCameraDone();
     void                                                            taskDone();
 
-    public slots:
+
+public slots:
 
 private:
+    int                                                             semaphore = 0;
     void                                                            parserImage();
     std::vector<uchar>                                              decodedimg;
     char                                                            recv_buf[BUFFER_SIZE];  // recieve cache buffer
     YOLOWINDOW *                                                    y_parent;
+
+    QMutex                                                           mutex;
+    QWaitCondition                                                   condition;
+    std::atomic<bool>                                                stopped;
+
 };
 
 #endif // YOLOWINDOW_H

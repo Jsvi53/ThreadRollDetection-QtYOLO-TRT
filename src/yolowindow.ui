@@ -64,11 +64,11 @@
       <x>690</x>
       <y>10</y>
       <width>300</width>
-      <height>311</height>
+      <height>322</height>
      </rect>
     </property>
     <property name="currentIndex">
-     <number>1</number>
+     <number>0</number>
     </property>
     <widget class="QWidget" name="localFile">
      <attribute name="title">
@@ -157,7 +157,7 @@
         <x>0</x>
         <y>73</y>
         <width>294</width>
-        <height>210</height>
+        <height>221</height>
        </rect>
       </property>
       <property name="frameShape">
@@ -214,7 +214,7 @@
         <x>0</x>
         <y>73</y>
         <width>294</width>
-        <height>210</height>
+        <height>221</height>
        </rect>
       </property>
       <property name="frameShape">
@@ -240,9 +240,9 @@
     <property name="geometry">
      <rect>
       <x>690</x>
-      <y>332</y>
+      <y>337</y>
       <width>300</width>
-      <height>90</height>
+      <height>91</height>
      </rect>
     </property>
     <property name="title">
@@ -494,11 +494,18 @@
    </property>
   </action>
   <action name="actionUSB_Camera">
+   <property name="icon">
+    <iconset resource="../resources/resource.qrc">
+     <normaloff>:/menu/USB_Camera_btn_offline.svg</normaloff>
+     <normalon>:/menu/USB_Camera_btn_online.svg</normalon>:/menu/USB_Camera_btn_offline.svg</iconset>
+   </property>
    <property name="text">
-    <string>USB Camera</string>
+    <string>actionUSB_Camera</string>
    </property>
   </action>
  </widget>
- <resources/>
+ <resources>
+  <include location="../resources/resource.qrc"/>
+ </resources>
  <connections/>
 </ui>
