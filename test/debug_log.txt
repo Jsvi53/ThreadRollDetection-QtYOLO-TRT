@@ -1,0 +1,24 @@
+problem description:
+	1. Swith mode list:
+		- Image -> video 									| no | 'stop', 'pause' button not work
+		- Image -> local camera								| no | image graphicViwe can not clear
+		- Video -> remote camera							| no | image graphicViwe can not clear
+		- Video -> Image 									| no | video stream still exist
+		- Video -> local camera 							| no | video stream and local camera show alternately, and button are not switched
+		- Video -> remote camera							| no | errer stopped in few seconds
+		- Local camera -> Image								| no | can not switch all window, seeming to only work togather
+		- Local camera -> video								| no | work together ditto
+		- Local camera -> remote camera						| no | work together ditto
+		- Remote camera -> image							| no | work together ditto, button are not switched, and click start lead to collapse
+		- Remote camera -> video							| no | work together ditto, button are not switched, and click lead to collapse repeatedly 
+		- Remote camera -> local camera						| no | crashed when switching
+
+	2. Supplementary functions
+		- Add QMessageBox warning for file type error
+		- device add color state button
+
+
+
+
+
+

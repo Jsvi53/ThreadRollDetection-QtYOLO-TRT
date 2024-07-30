@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/menu">
+        <file>USB_Camera_btn_offline.svg</file>
+        <file>USB_Camera_btn_online.svg</file>
+    </qresource>
+</RCC>
