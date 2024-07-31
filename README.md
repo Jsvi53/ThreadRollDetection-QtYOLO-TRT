@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # ThreadRollDetection-QtYOLO-TRT
 A Qt-based thread roll detection and segmentation project integrating YOLO and TensorRT (TRT). This project can handle video, image, local camera, and remote camera inputs to achieve efficient detection and segmentation of thread roll images.
 =======
@@ -33,4 +32,3 @@ Ninja -j4
 2. Select a file or a file directory to be detected;
 3. Select a yolov8 engine of tensorrt, e.g. `best_sim.engine`，and click the `加载模型` to load the model;
 4. Click `开始检测` to start the detection task.
->>>>>>> test3
